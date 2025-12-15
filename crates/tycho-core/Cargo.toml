@@ -1,0 +1,51 @@
+[package]
+name = "tycho-core"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Core library for Tycho bridge - transport-agnostic business logic"
+
+[dependencies]
+# Tycho SDK (via workspace)
+tycho-simulation.workspace = true
+tycho-execution.workspace = true
+
+# Async runtime
+tokio.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
+
+# Data structures
+dashmap.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+
+# Error handling
+thiserror.workspace = true
+anyhow.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Numeric types
+num-bigint.workspace = true
+num-traits.workspace = true
+
+# Utilities
+hex.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rayon.workspace = true
+
+# Configuration
+envy.workspace = true
+
+# Metrics
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true

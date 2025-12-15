@@ -1,0 +1,88 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/tycho-core",
+    "crates/tycho-grpc",
+    "crates/tycho-ffi",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["tycho-bridge contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+# =============================================================================
+# Tycho SDK Crates (Propeller Heads) - DO NOT MOCK
+# These are the authoritative domain primitives for blockchain state and simulation.
+# =============================================================================
+
+# Simulation engine: ProtocolSim trait, GetAmountOutResult, spot_price, swap simulation
+tycho-simulation = { git = "https://github.com/propeller-heads/tycho-simulation.git", tag = "0.203.1", features = ["evm"] }
+
+# Execution encoding: TychoRouterEncoder, Solution, SwapBuilder for calldata generation
+tycho-execution = { git = "https://github.com/propeller-heads/tycho-execution.git", tag = "0.143.0", features = ["evm"] }
+
+# =============================================================================
+# Async Runtime & Streaming
+# =============================================================================
+tokio = { version = "1.0", features = ["full"] }
+tokio-stream = "0.1"
+futures = "0.3"
+
+# =============================================================================
+# gRPC (for tycho-grpc crate)
+# =============================================================================
+tonic = "0.12"
+prost = "0.13"
+tonic-build = "0.12"
+
+# =============================================================================
+# Serialization & Configuration
+# =============================================================================
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+envy = "0.4"
+
+# =============================================================================
+# Data Structures
+# =============================================================================
+dashmap = "6.1"
+
+# =============================================================================
+# Error Handling
+# =============================================================================
+thiserror = "1.0"
+anyhow = "1.0"
+
+# =============================================================================
+# Logging & Tracing
+# =============================================================================
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# =============================================================================
+# Metrics / Observability
+# =============================================================================
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", features = ["http-listener"] }
+
+# =============================================================================
+# Numeric Types
+# =============================================================================
+num-bigint = "0.4"
+num-traits = "0.2"
+
+# =============================================================================
+# Utilities
+# =============================================================================
+hex = "0.4"
+chrono = "0.4"
+uuid = { version = "1.11", features = ["v4"] }
+rayon = "1.10"
+
+# =============================================================================
+# Testing
+# =============================================================================
+tokio-test = "0.4"

@@ -1,0 +1,43 @@
+[package]
+name = "tycho-grpc"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "gRPC server for Tycho bridge - thin wrapper around tycho-core"
+
+[dependencies]
+# Core library
+tycho-core = { path = "../tycho-core" }
+
+# gRPC
+tonic.workspace = true
+prost.workspace = true
+
+# Async runtime
+tokio.workspace = true
+tokio-stream.workspace = true
+
+# Logging
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Metrics
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+
+# Numeric types
+num-bigint.workspace = true
+num-traits.workspace = true
+
+# Utilities
+uuid.workspace = true
+hex.workspace = true
+rayon.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true
+
+[[bin]]
+name = "tycho-bridge"
+path = "src/main.rs"

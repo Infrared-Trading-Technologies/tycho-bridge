@@ -1,0 +1,18 @@
+version: v2
+
+modules:
+  - path: ../../proto
+
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/branched-services/tycho-bridge-go/gen
+
+lint:
+  use:
+    - DEFAULT
+
+breaking:
+  use:
+    - FILE

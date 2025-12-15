@@ -1,0 +1,57 @@
+# ==============================================================================
+# Docker Build Context Ignore File
+# ==============================================================================
+# Files and directories to exclude from the Docker build context.
+# This reduces build context size and prevents sensitive files from being sent.
+
+# Build artifacts (will be rebuilt in container)
+target/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Git (not needed in container)
+.git/
+.gitignore
+
+# Documentation (not needed in runtime)
+docs/
+README.md
+*.md
+
+# Local environment (secrets!)
+.env
+.env.local
+.env.*.local
+
+# Keep .env.example for reference but don't include in build
+# (it's not used at runtime anyway)
+
+# Development files
+*.log
+*.tmp
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage and profiling
+*.profraw
+coverage/
+lcov.info
+
+# Kubernetes manifests (if any, build separately)
+k8s/
+kubernetes/
+deploy/
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile

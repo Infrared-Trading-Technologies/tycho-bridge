@@ -1,0 +1,723 @@
+// TychoBridge gRPC API
+// 
+// A Rust gRPC sidecar that wraps Propeller Heads' Tycho SDKs:
+// - tycho-client (Indexing): https://docs.propellerheads.xyz/tycho/for-solvers/indexer
+// - tycho-simulation (Simulation): https://docs.propellerheads.xyz/tycho/for-solvers/simulation
+// - tycho-execution (Execution): https://docs.propellerheads.xyz/tycho/for-solvers/execution
+//
+// Architecture: "Remote State, Local Execution"
+// - Streams blockchain state from Tycho Indexer
+// - Materializes in-memory cache
+// - Provides zero-network-latency simulations (5-3000μs)
+
+syntax = "proto3";
+
+package tycho.bridge.v1;
+
+option go_package = "github.com/branched-services/tycho-bridge/gen/go/tycho/bridge/v1;bridgev1";
+
+// =============================================================================
+// SERVICE DEFINITION
+// =============================================================================
+
+service TychoBridge {
+  // ---------------------------------------------------------------------------
+  // INDEXING - Data Access (tycho-client)
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client
+  // ---------------------------------------------------------------------------
+
+  // GetTokens fetches token information from the Tycho Indexer RPC.
+  // Equivalent to load_all_tokens() utility function.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#step-1-fetch-tokens
+  rpc GetTokens(GetTokensRequest) returns (GetTokensResponse);
+
+  // GetProtocolComponents fetches protocol components (pools, markets, etc.)
+  // Source: https://docs.propellerheads.xyz/tycho/concepts (ProtocolComponents section)
+  rpc GetProtocolComponents(GetProtocolComponentsRequest) returns (GetProtocolComponentsResponse);
+
+  // StreamUpdates provides real-time streaming of protocol state changes.
+  // Emits snapshots on startup, then deltas per block.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client
+  rpc StreamUpdates(StreamUpdatesRequest) returns (stream Update);
+
+  // ---------------------------------------------------------------------------
+  // SIMULATION - ProtocolSim Trait Methods
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#main-interface
+  // Trait definition: https://github.com/propeller-heads/tycho-simulation/blob/main/src/protocol/state.rs
+  // ---------------------------------------------------------------------------
+
+  // SpotPrice returns the pool's current marginal price.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#spot-price
+  // Rust: fn spot_price(&self, base: &Token, quote: &Token) -> Result<f64, SimulationError>
+  rpc SpotPrice(SpotPriceRequest) returns (SpotPriceResponse);
+
+  // GetAmountOut simulates a token swap and returns the expected output.
+  // This is the primary simulation method - executes in-memory against cached state.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-amount-out
+  // Rust: fn get_amount_out(&self, amount_in: BigUint, token_in: &Token, token_out: &Token) -> Result<GetAmountOutResult, SimulationError>
+  rpc GetAmountOut(GetAmountOutRequest) returns (GetAmountOutResponse);
+
+  // GetFee returns the protocol fee as a ratio (e.g., 0.01 for 1%).
+  // If the fee is dynamic, returns the minimal fee.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#fee
+  // Rust: fn fee(&self) -> f64
+  rpc GetFee(GetFeeRequest) returns (GetFeeResponse);
+
+  // GetLimits returns the maximum tradeable amounts between two tokens.
+  // Returns both hard limits and "soft" limits (advised maximums).
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-limits
+  // Rust: fn get_limits(&self, sell_token: Address, buy_token: Address) -> Result<(BigUint, BigUint), SimulationError>
+  rpc GetLimits(GetLimitsRequest) returns (GetLimitsResponse);
+
+  // SwapToPrice calculates the trade required to move pool price to a target.
+  // Returns amount_in required and amount_out received.
+  // Target price is token_out/token_in, net of all fees.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#swap-to-price
+  // Rust: fn swap_to_price(&self, token_in: Address, token_out: Address, target_price: Price) -> Result<Trade, SimulationError>
+  rpc SwapToPrice(SwapToPriceRequest) returns (SwapToPriceResponse);
+
+  // QuerySupply returns the maximum token_out a pool can supply at a price floor.
+  // Also returns the corresponding token_in demand.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#query-supply
+  // Rust: fn query_supply(&self, token_in: Address, token_out: Address, target_price: Price) -> Result<Trade, SimulationError>
+  rpc QuerySupply(QuerySupplyRequest) returns (QuerySupplyResponse);
+
+  // ---------------------------------------------------------------------------
+  // SIMULATION - Batch & Route Operations (Bridge Extensions)
+  // ---------------------------------------------------------------------------
+
+  // BatchGetAmountOut executes multiple GetAmountOut simulations in parallel.
+  // Useful for testing hundreds of routing paths efficiently.
+  rpc BatchGetAmountOut(BatchGetAmountOutRequest) returns (BatchGetAmountOutResponse);
+
+  // SimulateRoute simulates a multi-hop swap path with state transitions.
+  // Each hop uses the new_state from the previous hop for accurate chained simulation.
+  // Source: GetAmountOutResult.new_state - https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-amount-out
+  rpc SimulateRoute(SimulateRouteRequest) returns (SimulateRouteResponse);
+
+  // ---------------------------------------------------------------------------
+  // EXECUTION - Encoding (tycho-execution)
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding
+  // ---------------------------------------------------------------------------
+
+  // EncodeSolution converts a Solution into calldata for the Tycho Router.
+  // Supports single swaps, multi-hop, and split routes.
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#solution-struct
+  rpc EncodeSolution(EncodeSolutionRequest) returns (EncodeSolutionResponse);
+
+  // ---------------------------------------------------------------------------
+  // SERVICE - Health & Status
+  // ---------------------------------------------------------------------------
+
+  // GetStatus returns service health, cache statistics, and sync status.
+  rpc GetStatus(GetStatusRequest) returns (GetStatusResponse);
+}
+
+// =============================================================================
+// COMMON TYPES
+// =============================================================================
+
+// BigInt represents an unsigned 256-bit integer as a decimal string.
+// Example: "1000000000000000000" for 1e18 (1 ETH in wei)
+message BigInt {
+  string value = 1;
+}
+
+// Price represents a price as a rational fraction (numerator / denominator).
+// Used for exact price math without floating-point errors.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#swap-to-price
+message Price {
+  BigInt numerator = 1;
+  BigInt denominator = 2;
+}
+
+// Trade represents a trade result between two tokens.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#swap-to-price
+message Trade {
+  BigInt amount_in = 1;
+  BigInt amount_out = 2;
+}
+
+// Token represents an ERC20 token.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (new_tokens field)
+message Token {
+  // Token contract address (checksummed)
+  string address = 1;
+  // Token decimals (e.g., 18 for ETH, 6 for USDC)
+  uint32 decimals = 2;
+  // Token symbol (e.g., "WETH", "USDC")
+  string symbol = 3;
+  // Token quality score (0-100)
+  // 100: Normal token, 75: Rebase token, 50: Fee token
+  // 10: Analysis failed at creation, 5: Analysis failed on cronjob, 0: Failed to extract decimals
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/clients
+  int32 quality = 4;
+}
+
+// Chain identifies a blockchain network.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/hosted-endpoints
+enum Chain {
+  CHAIN_UNSPECIFIED = 0;
+  CHAIN_ETHEREUM = 1;
+  CHAIN_BASE = 2;
+  CHAIN_UNICHAIN = 3;
+  CHAIN_ARBITRUM = 4;
+}
+
+// =============================================================================
+// INDEXING - Protocol Components
+// =============================================================================
+
+// ProtocolComponent represents a specific operation on a token set (e.g., a pool).
+// Source: https://docs.propellerheads.xyz/tycho/concepts (ProtocolComponents section)
+message ProtocolComponent {
+  // Unique identifier (typically the pool/component address)
+  string id = 1;
+  // Protocol system name (e.g., "uniswap_v2", "uniswap_v3", "vm:balancer_v2")
+  string protocol_system = 2;
+  // Protocol type name (e.g., "UniswapV2Pool", "UniswapV3Pool")
+  string protocol_type_name = 3;
+  // Chain this component exists on
+  Chain chain = 4;
+  // Token addresses involved in this component
+  repeated string tokens = 5;
+  // Smart contracts involved in executing operations
+  repeated string contract_addresses = 6;
+  // Static attributes known at creation time (fees, factory addresses, pool keys)
+  // Source: https://docs.propellerheads.xyz/tycho/concepts
+  map<string, string> static_attributes = 7;
+  // Transaction hash that created this component
+  string creation_tx = 8;
+}
+
+// ComponentState contains dynamic attributes that change per block.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (state_updates field)
+message ComponentState {
+  // Component ID this state belongs to
+  string component_id = 1;
+  // Dynamic state attributes (reserves, balances, tick, etc.)
+  // Keys are protocol-specific (e.g., "reserve0", "reserve1" for UniV2)
+  map<string, bytes> attributes = 2;
+  // Component balances per token address
+  map<string, BigInt> balances = 3;
+  // Estimated TVL in native token (e.g., ETH)
+  double tvl = 4;
+}
+
+// ContractState contains contract storage for VM simulations.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (account_updates field)
+message ContractState {
+  // Contract address
+  string address = 1;
+  // Contract bytecode (for VM simulation)
+  bytes code = 2;
+  // Storage slots (key -> value)
+  map<string, bytes> storage = 3;
+  // Native balance of the contract
+  BigInt balance = 4;
+}
+
+// =============================================================================
+// INDEXING - Streaming
+// =============================================================================
+
+// GetTokensRequest fetches tokens from the Tycho Indexer RPC.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#step-1-fetch-tokens
+message GetTokensRequest {
+  Chain chain = 1;
+  // Minimum token quality (0-100, defaults to 100 for ERC20-like tokens only)
+  optional int32 min_quality = 2;
+  // Only return tokens traded within this many days
+  optional uint64 traded_n_days_ago = 3;
+  // Pagination
+  uint32 page = 4;
+  uint32 page_size = 5;
+}
+
+message GetTokensResponse {
+  repeated Token tokens = 1;
+  uint32 total_count = 2;
+}
+
+// GetProtocolComponentsRequest fetches protocol components.
+message GetProtocolComponentsRequest {
+  Chain chain = 1;
+  // Filter by protocol systems (e.g., ["uniswap_v2", "uniswap_v3"])
+  repeated string protocol_systems = 2;
+  // Filter by specific component IDs
+  repeated string component_ids = 3;
+  // Filter by token addresses (components containing ANY of these tokens)
+  repeated string token_addresses = 4;
+  // Minimum TVL in native token
+  optional double min_tvl = 5;
+  // Pagination
+  uint32 page = 6;
+  uint32 page_size = 7;
+}
+
+message GetProtocolComponentsResponse {
+  repeated ProtocolComponent components = 1;
+  uint32 total_count = 2;
+}
+
+// StreamUpdatesRequest subscribes to real-time protocol state updates.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client
+message StreamUpdatesRequest {
+  Chain chain = 1;
+  // Protocol systems to subscribe to (e.g., ["uniswap_v2", "vm:balancer_v2"])
+  repeated string protocol_systems = 2;
+  // Minimum TVL threshold for automatic tracking
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (TVL filtering)
+  optional double min_tvl = 3;
+  // Alternative: TVL range for hysteresis (prevents thrashing at boundaries)
+  // Components are added when exceeding add_tvl, removed when below remove_tvl
+  optional double add_tvl_threshold = 4;
+  optional double remove_tvl_threshold = 5;
+  // Filter by specific component IDs instead of TVL
+  repeated string component_ids = 6;
+  // Include contract storage for VM simulations
+  bool include_contract_state = 7;
+}
+
+// Update represents a streaming update message.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client
+message Update {
+  // Block information
+  uint64 block_number = 1;
+  string block_hash = 2;
+  uint64 timestamp = 3;
+
+  // First message contains all components as snapshots
+  // Subsequent messages contain only deltas
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (snapshots vs deltas)
+  
+  // New components witnessed (created or newly meeting filter criteria)
+  // Source: new_protocol_components field
+  repeated ProtocolComponent new_components = 4;
+  
+  // Components no longer tracked (deleted or no longer meeting filter criteria)
+  // Source: deleted_protocol_components field
+  repeated string removed_component_ids = 5;
+  
+  // Updated states for components modified in this block
+  // Source: state_updates field
+  repeated ComponentState state_updates = 6;
+  
+  // Contract storage changes for VM simulations
+  // Source: account_updates field
+  repeated ContractState contract_updates = 7;
+  
+  // New tokens discovered
+  // Source: new_tokens field
+  repeated Token new_tokens = 8;
+}
+
+// =============================================================================
+// SIMULATION - ProtocolSim Methods
+// =============================================================================
+
+// SpotPriceRequest queries the marginal price of a pool.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#spot-price
+message SpotPriceRequest {
+  Chain chain = 1;
+  // Pool/component ID
+  string component_id = 2;
+  // Base token (the token you're selling)
+  string base_token = 3;
+  // Quote token (the token you're buying)
+  string quote_token = 4;
+}
+
+message SpotPriceResponse {
+  // Marginal price as a float (quote_token per base_token)
+  double price = 1;
+  // Price as a rational for exact math
+  Price price_rational = 2;
+}
+
+// GetAmountOutRequest simulates a swap.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-amount-out
+message GetAmountOutRequest {
+  Chain chain = 1;
+  // Pool/component ID
+  string component_id = 2;
+  // Amount of token_in to swap
+  BigInt amount_in = 3;
+  // Token being sold
+  string token_in = 4;
+  // Token being bought
+  string token_out = 5;
+  // Optional: Override pool state for parallel/speculative simulations
+  // Pass the new_pool_state from a previous simulation to chain simulations
+  optional bytes pool_state_override = 6;
+}
+
+// GetAmountOutResponse returns simulation results.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-amount-out
+// Rust struct: GetAmountOutResult { amount, gas, new_state }
+message GetAmountOutResponse {
+  // Amount of token_out received
+  BigInt amount = 1;
+  // Estimated gas cost
+  BigInt gas = 2;
+  // Serialized new pool state after the swap
+  // Can be passed to subsequent simulations for chained swaps
+  // Source: "new_state allows you to simulate consecutive swaps in the same protocol"
+  bytes new_pool_state = 3;
+  // Total execution time in microseconds (includes all overhead)
+  uint64 execution_time_us = 4;
+  // Effective price (amount_out / amount_in)
+  double effective_price = 5;
+  // Price impact in basis points
+  double price_impact_bps = 6;
+  // Pure AMM simulation time in microseconds (just the get_amount_out call)
+  uint64 simulation_time_us = 7;
+}
+
+// GetFeeRequest queries the protocol fee.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#fee
+message GetFeeRequest {
+  Chain chain = 1;
+  string component_id = 2;
+}
+
+message GetFeeResponse {
+  // Fee as a ratio (e.g., 0.003 for 0.3%)
+  double fee = 1;
+  // Fee in basis points (e.g., 30 for 0.3%)
+  uint32 fee_bps = 2;
+  // Whether this is a dynamic fee (returns minimum if dynamic)
+  bool is_dynamic = 3;
+}
+
+// GetLimitsRequest queries maximum tradeable amounts.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#get-limits
+message GetLimitsRequest {
+  Chain chain = 1;
+  string component_id = 2;
+  // Token being sold
+  string sell_token = 3;
+  // Token being bought
+  string buy_token = 4;
+}
+
+message GetLimitsResponse {
+  // Maximum amount of sell_token that can be traded
+  BigInt max_sell_amount = 1;
+  // Maximum amount of buy_token that can be received
+  BigInt max_buy_amount = 2;
+  // Whether these are "soft" limits (advised maximums vs hard limits)
+  // Source: "If there are no hard limits (e.g., UniV2), returns a soft limit"
+  bool is_soft_limit = 3;
+}
+
+// SwapToPriceRequest calculates trade to reach a target price.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#swap-to-price
+message SwapToPriceRequest {
+  Chain chain = 1;
+  string component_id = 2;
+  // Token being sold
+  string token_in = 3;
+  // Token being bought
+  string token_out = 4;
+  // Target price as token_out/token_in, net of all fees
+  Price target_price = 5;
+}
+
+message SwapToPriceResponse {
+  // Trade required to reach target price
+  Trade trade = 1;
+  // Whether the target price is reachable
+  bool is_reachable = 2;
+}
+
+// QuerySupplyRequest queries maximum supply at a price floor.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/simulation#query-supply
+message QuerySupplyRequest {
+  Chain chain = 1;
+  string component_id = 2;
+  // Token being sold
+  string token_in = 3;
+  // Token being bought
+  string token_out = 4;
+  // Minimum acceptable price (token_out/token_in), net of all fees
+  Price min_price = 5;
+}
+
+message QuerySupplyResponse {
+  // Maximum trade that maintains price above min_price
+  Trade trade = 1;
+}
+
+// =============================================================================
+// SIMULATION - Batch Operations
+// =============================================================================
+
+// BatchGetAmountOutRequest executes multiple simulations in parallel.
+message BatchGetAmountOutRequest {
+  repeated GetAmountOutRequest requests = 1;
+  // Execute in parallel (default: true)
+  bool parallel = 2;
+}
+
+message BatchGetAmountOutResponse {
+  repeated GetAmountOutResult results = 1;
+  // Total execution time in microseconds
+  uint64 total_execution_time_us = 2;
+}
+
+// GetAmountOutResult wraps a single simulation result with error handling.
+message GetAmountOutResult {
+  oneof result {
+    GetAmountOutResponse success = 1;
+    SimulationError error = 2;
+  }
+}
+
+// SimulationError represents errors from simulation.
+message SimulationError {
+  SimulationErrorCode code = 1;
+  string message = 2;
+}
+
+enum SimulationErrorCode {
+  SIMULATION_ERROR_CODE_UNSPECIFIED = 0;
+  SIMULATION_ERROR_CODE_COMPONENT_NOT_FOUND = 1;
+  SIMULATION_ERROR_CODE_TOKEN_NOT_FOUND = 2;
+  SIMULATION_ERROR_CODE_INSUFFICIENT_LIQUIDITY = 3;
+  SIMULATION_ERROR_CODE_AMOUNT_EXCEEDS_LIMIT = 4;
+  SIMULATION_ERROR_CODE_INVALID_TOKEN_PAIR = 5;
+  SIMULATION_ERROR_CODE_POOL_STATE_ERROR = 6;
+  SIMULATION_ERROR_CODE_VM_EXECUTION_ERROR = 7;
+}
+
+// =============================================================================
+// SIMULATION - Route Simulation
+// =============================================================================
+
+// SimulateRouteRequest simulates a multi-hop swap path.
+message SimulateRouteRequest {
+  Chain chain = 1;
+  // Ordered list of hops in the route
+  repeated RouteHop hops = 2;
+  // Initial amount to swap
+  BigInt amount_in = 3;
+  // Optional: Override pool states for speculative simulation
+  map<string, bytes> pool_state_overrides = 4;
+}
+
+// RouteHop represents a single hop in a multi-hop route.
+message RouteHop {
+  // Pool/component ID for this hop
+  string component_id = 1;
+  // Token being sold in this hop
+  string token_in = 2;
+  // Token being bought in this hop
+  string token_out = 3;
+}
+
+message SimulateRouteResponse {
+  // Final amount received after all hops
+  BigInt amount_out = 1;
+  // Total estimated gas for all hops
+  BigInt total_gas = 2;
+  // Results for each hop
+  repeated HopResult hops = 3;
+  // Final pool states after all swaps (for further simulations)
+  map<string, bytes> final_pool_states = 4;
+  // Total price impact across all hops (in basis points)
+  double total_price_impact_bps = 5;
+  // Total execution time in microseconds
+  uint64 total_execution_time_us = 6;
+}
+
+// HopResult contains the result of a single hop in a route.
+message HopResult {
+  string component_id = 1;
+  BigInt amount_in = 2;
+  BigInt amount_out = 3;
+  BigInt gas = 4;
+  double effective_price = 5;
+  double price_impact_bps = 6;
+}
+
+// =============================================================================
+// EXECUTION - Solution Encoding
+// =============================================================================
+
+// EncodeSolutionRequest encodes a Solution for on-chain execution.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#solution-struct
+message EncodeSolutionRequest {
+  Chain chain = 1;
+  Solution solution = 2;
+  // Encoder to use
+  EncoderType encoder_type = 3;
+  // User transfer type for token approvals
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#token-allowances
+  UserTransferType user_transfer_type = 4;
+}
+
+// Solution specifies the details of an order and how it should be filled.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#solution-struct
+message Solution {
+  // Token being sold (exact in) or bought (exact out)
+  string given_token = 1;
+  // Amount of the given token
+  BigInt given_amount = 2;
+  // Token being bought - final balance will be checked by router
+  string checked_token = 3;
+  // Address of the sender of given_token
+  string sender = 4;
+  // Address of the receiver of checked_token
+  string receiver = 5;
+  // False for exact input (sell order), true for exact output (buy order)
+  // Note: "Currently only exact input solutions are supported"
+  bool exact_out = 6;
+  // Address of the Tycho Router contract
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/contract-addresses
+  string router_address = 7;
+  // List of swaps to fulfill the solution
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#swap-struct
+  repeated Swap swaps = 8;
+  // Minimum amount out for the solution to be valid
+  BigInt checked_amount = 9;
+  // Optional: Wrap/unwrap native tokens
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#wrapping-and-unwrapping
+  optional NativeAction native_action = 10;
+}
+
+// Swap represents a swap operation on a pool.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#swap-struct
+message Swap {
+  // Protocol component (pool) to swap on
+  ProtocolComponent component = 1;
+  // Token you provide to the pool
+  string token_in = 2;
+  // Token you expect from the pool
+  string token_out = 3;
+  // Percentage of amount_in for this swap (0.0-1.0)
+  // Use 0 for remainder (router sends all remaining tokens)
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#split-swaps
+  double split = 4;
+  // Optional: Protocol state for the swap
+  optional bytes protocol_state = 5;
+  // Optional: Estimated amount_in (required for RFQ protocols)
+  optional BigInt estimated_amount_in = 6;
+}
+
+// NativeAction specifies wrapping/unwrapping of native tokens.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#wrapping-and-unwrapping
+enum NativeAction {
+  NATIVE_ACTION_UNSPECIFIED = 0;
+  // Wrap native token (e.g., ETH -> WETH) before first swap
+  NATIVE_ACTION_WRAP = 1;
+  // Unwrap to native token (e.g., WETH -> ETH) after final swap
+  NATIVE_ACTION_UNWRAP = 2;
+}
+
+// EncoderType specifies which encoder to use.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#encoders
+enum EncoderType {
+  ENCODER_TYPE_UNSPECIFIED = 0;
+  // TychoRouterEncoder - prepares calldata for Tycho Router contract
+  // Supports complex swap strategies including multi-hop and split swaps
+  ENCODER_TYPE_TYCHO_ROUTER = 1;
+  // TychoExecutorEncoder - prepares calldata for direct Executor contracts
+  // Encodes one swap at a time, bypasses router
+  ENCODER_TYPE_TYCHO_EXECUTOR = 2;
+}
+
+// UserTransferType defines how funds are transferred from the user.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#token-allowances
+enum UserTransferType {
+  USER_TRANSFER_TYPE_UNSPECIFIED = 0;
+  // Use Permit2 for gasless approvals
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#permit2
+  USER_TRANSFER_TYPE_TRANSFER_FROM_PERMIT2 = 1;
+  // Use standard ERC20 approve + transferFrom
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#standard-erc20-approvals
+  USER_TRANSFER_TYPE_TRANSFER_FROM = 2;
+  // Direct transfer (advanced users only - router must be funded in same tx)
+  // Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#direct-transfers
+  USER_TRANSFER_TYPE_NONE = 3;
+}
+
+// EncodeSolutionResponse returns encoded calldata.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution/encoding#encoded-solution-struct
+message EncodeSolutionResponse {
+  // Encoded calldata for the swaps
+  bytes encoded_swaps = 1;
+  // Contract address to call (Tycho Router or Executor)
+  string interacting_with = 2;
+  // Function selector to call
+  string selector = 3;
+  // Number of tokens in the trade
+  uint32 n_tokens = 4;
+  // Optional: Permit2 data (if using Permit2 transfers)
+  optional Permit permit = 5;
+  // Full transaction data (for convenience - includes all guardrails)
+  // WARNING: You should build your own calldata for production
+  // Source: "We do not recommend using this in production"
+  optional bytes full_calldata = 6;
+}
+
+// Permit represents Permit2 signature data.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/execution#permit2
+message Permit {
+  // Token to permit
+  string token = 1;
+  // Amount to permit
+  BigInt amount = 2;
+  // Expiration timestamp
+  uint64 expiration = 3;
+  // Nonce
+  uint64 nonce = 4;
+  // Spender address
+  string spender = 5;
+  // Signature deadline
+  uint64 sig_deadline = 6;
+}
+
+// =============================================================================
+// SERVICE - Status
+// =============================================================================
+
+message GetStatusRequest {}
+
+message GetStatusResponse {
+  // Service health
+  bool healthy = 1;
+  // Service version
+  string version = 2;
+  // Chains being served
+  repeated ChainStatus chains = 3;
+  // Uptime in seconds
+  uint64 uptime_seconds = 4;
+}
+
+// ChainStatus provides status for a specific chain.
+message ChainStatus {
+  Chain chain = 1;
+  // Whether the chain is synced
+  bool synced = 2;
+  // Latest block number in cache
+  uint64 latest_block = 3;
+  // Number of protocol components tracked
+  uint64 component_count = 4;
+  // Number of tokens tracked
+  uint64 token_count = 5;
+  // Tycho Indexer URL
+  string indexer_url = 6;
+  // Sync status per protocol system
+  repeated ProtocolSyncStatus protocol_sync_statuses = 7;
+}
+
+// ProtocolSyncStatus provides sync status for a protocol.
+// Source: https://docs.propellerheads.xyz/tycho/for-solvers/indexer/tycho-client (sync_states)
+message ProtocolSyncStatus {
+  string protocol_system = 1;
+  // Sync status: "ready", "delayed", "stale", "ended"
+  string status = 2;
+  // Latest synced block for this protocol
+  uint64 latest_block = 3;
+}

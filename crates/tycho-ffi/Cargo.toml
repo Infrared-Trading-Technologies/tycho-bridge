@@ -1,0 +1,34 @@
+[package]
+name = "tycho-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "C FFI layer for Tycho bridge - universal language bindings"
+
+[lib]
+name = "tycho_bridge"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+# Core library
+tycho-core = { path = "../tycho-core" }
+
+# Async runtime (for blocking bridge)
+tokio.workspace = true
+
+# Logging
+tracing.workspace = true
+
+# Serialization (for JSON responses)
+serde.workspace = true
+serde_json.workspace = true
+
+# BigInt for type conversions
+num-bigint.workspace = true
+
+# FFI
+libc = "0.2"
+
+[build-dependencies]
+cbindgen = "0.27"
