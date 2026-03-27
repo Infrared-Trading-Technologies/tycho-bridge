@@ -312,8 +312,8 @@ For production:
 ### 1. Request Dedicated Hosted Instance
 
 Contact Propellerheads about dedicated hosting with SLA:
-- Telegram: @tanay_j
-- Email: security@propellerheads.xyz
+- Documentation: https://docs.propellerheads.xyz/tycho
+- Telegram Community: https://t.me/+B4CNQwv7dgIyYTJl
 
 ### 2. Become a Tycho Fellow
 
