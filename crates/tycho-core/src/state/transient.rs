@@ -318,12 +318,13 @@ mod tests {
     use tycho_simulation::tycho_common::Bytes;
 
     /// Mock ProtocolSim for testing.
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
     struct MockState {
         reserve0: u64,
         reserve1: u64,
     }
 
+    #[typetag::serde]
     impl ProtocolSim for MockState {
         fn fee(&self) -> f64 {
             0.003
@@ -368,7 +369,7 @@ mod tests {
             _delta: ProtocolStateDelta,
             _tokens: &HashMap<Bytes, Token>,
             _balances: &Balances,
-        ) -> Result<(), TransitionError<String>> {
+        ) -> Result<(), TransitionError> {
             Ok(())
         }
 

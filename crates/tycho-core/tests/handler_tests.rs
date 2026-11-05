@@ -6,13 +6,14 @@
 mod common;
 
 use num_bigint::BigUint;
+use tycho_core::domain::UniswapV2State;
 use tycho_core::error::BridgeError;
 use tycho_core::types::request::{
     BatchGetAmountOutRequest, GetAmountOutRequest, GetFeeRequest, GetLimitsRequest,
-    SimulateRouteRequest, SpotPriceRequest,
+    QuerySupplyRequest, SimulateRouteRequest, SpotPriceRequest, SwapToPriceRequest,
 };
 
-use common::{addresses, TestFixture};
+use common::{addresses, create_mock_token, TestFixture};
 
 // =============================================================================
 // SpotPrice Handler Tests
@@ -566,4 +567,120 @@ fn test_multi_chain_isolation() {
         "Ethereum price should be ~2.0"
     );
     assert!((price_base - 3.0).abs() < 0.1, "Base price should be ~3.0");
+}
+
+// =============================================================================
+// SwapToPrice / QuerySupply Handler Tests (pool swap queries)
+// =============================================================================
+
+/// Add a real Uniswap V2 WETH/USDC pool: 2,000,000 USDC (token0) and 1,000 WETH (token1).
+///
+/// USDC sorts below WETH by address, so it is token0. Spot price for selling WETH is
+/// 2e12 / 1e21 = 2e-9 USDC atomic units per WETH atomic unit.
+fn add_uniswap_v2_weth_usdc_pool(fixture: &TestFixture) {
+    let state: UniswapV2State = serde_json::from_value(serde_json::json!({
+        "reserve0": "0x1d1a94a2000",        // 2_000_000 * 10^6
+        "reserve1": "0x3635c9adc5dea00000", // 1_000 * 10^18
+    }))
+    .expect("valid UniswapV2State");
+
+    let weth = create_mock_token(addresses::WETH, "WETH", 18);
+    let usdc = create_mock_token(addresses::USDC, "USDC", 6);
+    fixture.add_pool_with_state(
+        1,
+        addresses::POOL_1,
+        "uniswap_v2",
+        vec![weth, usdc],
+        Box::new(state),
+    );
+}
+
+#[test]
+fn test_swap_to_price_reaches_target() {
+    let fixture = TestFixture::new();
+    add_uniswap_v2_weth_usdc_pool(&fixture);
+    fixture.complete_snapshot(1);
+    let service = fixture.build_bridge_service(vec![1]);
+
+    // Target 1.9e-9 USDC/WETH (atomic), below the 2e-9 spot price.
+    let numerator = BigUint::from(19u32);
+    let denominator = BigUint::from(10_000_000_000u64);
+    let resp = service
+        .swap_to_price(SwapToPriceRequest {
+            chain_id: 1,
+            component_id: addresses::POOL_1.to_string(),
+            token_in: addresses::WETH.to_string(),
+            token_out: addresses::USDC.to_string(),
+            target_price_numerator: numerator.clone(),
+            target_price_denominator: denominator.clone(),
+        })
+        .expect("swap_to_price succeeds");
+
+    assert!(resp.reached_target);
+    let trade = resp.trade.expect("trade returned");
+    assert!(trade.amount_in > BigUint::ZERO);
+    assert!(trade.amount_out > BigUint::ZERO);
+    // The average execution price stays above the marginal target price.
+    assert!(&trade.amount_out * &denominator >= &trade.amount_in * &numerator);
+}
+
+#[test]
+fn test_swap_to_price_target_above_spot_is_not_reached() {
+    let fixture = TestFixture::new();
+    add_uniswap_v2_weth_usdc_pool(&fixture);
+    fixture.complete_snapshot(1);
+    let service = fixture.build_bridge_service(vec![1]);
+
+    // Target 2.1e-9 is above the 2e-9 spot price: selling WETH cannot raise the price.
+    let resp = service
+        .swap_to_price(SwapToPriceRequest {
+            chain_id: 1,
+            component_id: addresses::POOL_1.to_string(),
+            token_in: addresses::WETH.to_string(),
+            token_out: addresses::USDC.to_string(),
+            target_price_numerator: BigUint::from(21u32),
+            target_price_denominator: BigUint::from(10_000_000_000u64),
+        })
+        .expect("swap_to_price succeeds");
+
+    assert!(!resp.reached_target);
+}
+
+#[test]
+fn test_swap_to_price_token_not_found() {
+    let fixture = TestFixture::new();
+    add_uniswap_v2_weth_usdc_pool(&fixture);
+    fixture.complete_snapshot(1);
+    let service = fixture.build_bridge_service(vec![1]);
+
+    let result = service.swap_to_price(SwapToPriceRequest {
+        chain_id: 1,
+        component_id: addresses::POOL_1.to_string(),
+        token_in: "0x0000000000000000000000000000000000000001".to_string(),
+        token_out: addresses::USDC.to_string(),
+        target_price_numerator: BigUint::from(19u32),
+        target_price_denominator: BigUint::from(10_000_000_000u64),
+    });
+
+    assert!(matches!(result, Err(BridgeError::TokenNotFound { .. })));
+}
+
+#[test]
+fn test_query_supply_unsupported_constraint_returns_simulation_error() {
+    let fixture = TestFixture::new();
+    add_uniswap_v2_weth_usdc_pool(&fixture);
+    fixture.complete_snapshot(1);
+    let service = fixture.build_bridge_service(vec![1]);
+
+    // Uniswap V2 states do not implement the TradeLimitPrice constraint upstream.
+    let result = service.query_supply(QuerySupplyRequest {
+        chain_id: 1,
+        component_id: addresses::POOL_1.to_string(),
+        token_in: addresses::WETH.to_string(),
+        token_out: addresses::USDC.to_string(),
+        min_price_numerator: BigUint::from(19u32),
+        min_price_denominator: BigUint::from(10_000_000_000u64),
+    });
+
+    assert!(matches!(result, Err(BridgeError::SimulationError { .. })));
 }

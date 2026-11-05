@@ -18,7 +18,7 @@ use tycho_simulation::tycho_common::simulation::protocol_sim::{Balances, GetAmou
 /// Mock protocol simulation state for testing.
 ///
 /// Simulates a constant-product AMM (like UniswapV2) with configurable reserves.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct MockProtocolSim {
     pub reserve0: u64,
     pub reserve1: u64,
@@ -44,6 +44,7 @@ impl MockProtocolSim {
     }
 }
 
+#[typetag::serde]
 impl ProtocolSim for MockProtocolSim {
     fn fee(&self) -> f64 {
         self.fee
@@ -97,7 +98,7 @@ impl ProtocolSim for MockProtocolSim {
         _delta: ProtocolStateDelta,
         _tokens: &HashMap<Bytes, Token>,
         _balances: &Balances,
-    ) -> Result<(), TransitionError<String>> {
+    ) -> Result<(), TransitionError> {
         Ok(())
     }
 
@@ -193,11 +194,23 @@ impl TestFixture {
         tokens: Vec<Token>,
         state: MockProtocolSim,
     ) {
+        self.add_pool_with_state(chain_id, pool_id, protocol, tokens, Box::new(state));
+    }
+
+    /// Add a pool backed by any protocol state (e.g. a real tycho-simulation state).
+    pub fn add_pool_with_state(
+        &self,
+        chain_id: u64,
+        pool_id: &str,
+        protocol: &str,
+        tokens: Vec<Token>,
+        state: Box<dyn ProtocolSim>,
+    ) {
         let component = create_mock_component(pool_id, protocol, tokens);
         self.state_cache
             .insert_component_for_chain(chain_id, pool_id.to_string(), component);
         self.state_cache
-            .insert_state_for_chain(chain_id, pool_id.to_string(), Box::new(state));
+            .insert_state_for_chain(chain_id, pool_id.to_string(), state);
     }
 
     /// Add a standard WETH/USDC pool.

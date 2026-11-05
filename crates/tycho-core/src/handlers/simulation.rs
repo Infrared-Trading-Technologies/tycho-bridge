@@ -17,7 +17,7 @@ use num_traits::Zero;
 use tracing::{debug, error, info, instrument, trace, warn};
 
 use crate::bridge::BridgeService;
-use crate::domain::Price as TychoPrice;
+use crate::domain::{Price as TychoPrice, QueryPoolSwapParams, SwapConstraint, Token};
 use crate::error::{BridgeError, BridgeResult};
 use crate::helpers::{calculate_execution_price, find_token_in_component, normalize_address};
 use crate::state::make_composite_key;
@@ -289,9 +289,8 @@ impl BridgeService {
             .get_state(&composite_key)
             .ok_or_else(|| BridgeError::component_not_found(&req.component_id))?;
 
-        // Parse token addresses
-        let token_in_bytes = crate::helpers::parse_address(&req.token_in)?;
-        let token_out_bytes = crate::helpers::parse_address(&req.token_out)?;
+        let (token_in, token_out) =
+            self.resolve_token_pair(&composite_key, &req.token_in, &req.token_out)?;
 
         // Build Tycho Price struct
         let tycho_price = TychoPrice {
@@ -299,27 +298,40 @@ impl BridgeService {
             denominator: req.target_price_denominator.clone(),
         };
 
+        let params = QueryPoolSwapParams::new(
+            token_in,
+            token_out,
+            SwapConstraint::PoolTargetPrice {
+                target: tycho_price,
+                tolerance: 0.0,
+                min_amount_in: None,
+                max_amount_in: None,
+            },
+        );
+
         let state_guard = state.read().map_err(|e| {
             error!(error = %e, "Failed to acquire read lock on state");
             BridgeError::internal("Failed to lock state")
         })?;
 
-        match state_guard.swap_to_price(&token_in_bytes, &token_out_bytes, tycho_price) {
-            Ok(trade) => {
-                let is_reachable = !trade.amount_in.is_zero() || !trade.amount_out.is_zero();
+        match state_guard.query_pool_swap(&params) {
+            Ok(pool_swap) => {
+                let amount_in = pool_swap.amount_in().clone();
+                let amount_out = pool_swap.amount_out().clone();
+                let is_reachable = !amount_in.is_zero() || !amount_out.is_zero();
 
                 info!(
                     component_id = %req.component_id,
-                    amount_in = %trade.amount_in,
-                    amount_out = %trade.amount_out,
+                    amount_in = %amount_in,
+                    amount_out = %amount_out,
                     reached = is_reachable,
                     "SwapToPrice completed"
                 );
 
                 Ok(SwapToPriceResponse {
                     trade: Some(TradeInfo {
-                        amount_in: trade.amount_in,
-                        amount_out: trade.amount_out,
+                        amount_in,
+                        amount_out,
                         price_numerator: req.target_price_numerator,
                         price_denominator: req.target_price_denominator,
                     }),
@@ -361,9 +373,8 @@ impl BridgeService {
             .get_state(&composite_key)
             .ok_or_else(|| BridgeError::component_not_found(&req.component_id))?;
 
-        // Parse token addresses
-        let token_in_bytes = crate::helpers::parse_address(&req.token_in)?;
-        let token_out_bytes = crate::helpers::parse_address(&req.token_out)?;
+        let (token_in, token_out) =
+            self.resolve_token_pair(&composite_key, &req.token_in, &req.token_out)?;
 
         // Build min_price
         let min_price = TychoPrice {
@@ -371,31 +382,43 @@ impl BridgeService {
             denominator: req.min_price_denominator.clone(),
         };
 
+        let params = QueryPoolSwapParams::new(
+            token_in,
+            token_out,
+            SwapConstraint::TradeLimitPrice {
+                limit: min_price,
+                tolerance: 0.0,
+                min_amount_in: None,
+                max_amount_in: None,
+            },
+        );
+
         let state_guard = state.read().map_err(|e| {
             error!(error = %e, "Failed to acquire read lock on state");
             BridgeError::internal("Failed to lock state")
         })?;
 
-        let trade = state_guard
-            .query_supply(&token_in_bytes, &token_out_bytes, min_price)
-            .map_err(|e| {
-                warn!(error = %e, "QuerySupply simulation failed");
-                BridgeError::SimulationError {
-                    message: e.to_string(),
-                }
-            })?;
+        let pool_swap = state_guard.query_pool_swap(&params).map_err(|e| {
+            warn!(error = %e, "QuerySupply simulation failed");
+            BridgeError::SimulationError {
+                message: e.to_string(),
+            }
+        })?;
+
+        let amount_in = pool_swap.amount_in().clone();
+        let amount_out = pool_swap.amount_out().clone();
 
         info!(
             component_id = %req.component_id,
-            amount_in = %trade.amount_in,
-            amount_out = %trade.amount_out,
+            amount_in = %amount_in,
+            amount_out = %amount_out,
             "QuerySupply completed"
         );
 
         Ok(QuerySupplyResponse {
             trades: vec![TradeInfo {
-                amount_in: trade.amount_in,
-                amount_out: trade.amount_out,
+                amount_in,
+                amount_out,
                 price_numerator: req.min_price_numerator,
                 price_denominator: req.min_price_denominator,
             }],
@@ -554,5 +577,30 @@ impl BridgeService {
             total_gas_cost: total_gas,
             hop_results,
         })
+    }
+
+    /// Resolve a token pair to full `Token` metadata from the component's token list.
+    ///
+    /// Pool swap queries need token decimals, so both tokens must belong to the component.
+    fn resolve_token_pair(
+        &self,
+        composite_key: &str,
+        token_in: &str,
+        token_out: &str,
+    ) -> BridgeResult<(Token, Token)> {
+        let component = self
+            .state_cache
+            .get_component(composite_key)
+            .ok_or_else(|| BridgeError::internal("Component metadata not found"))?;
+
+        let token_in_addr = normalize_address(token_in)?;
+        let token_out_addr = normalize_address(token_out)?;
+
+        let resolved_in = find_token_in_component(&component.tokens, &token_in_addr)
+            .ok_or_else(|| BridgeError::token_not_found(token_in))?;
+        let resolved_out = find_token_in_component(&component.tokens, &token_out_addr)
+            .ok_or_else(|| BridgeError::token_not_found(token_out))?;
+
+        Ok((resolved_in, resolved_out))
     }
 }

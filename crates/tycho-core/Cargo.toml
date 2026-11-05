@@ -49,3 +49,4 @@ metrics-exporter-prometheus.workspace = true
 
 [dev-dependencies]
 tokio-test.workspace = true
+typetag.workspace = true
