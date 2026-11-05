@@ -16,13 +16,18 @@ license = "MIT"
 # =============================================================================
 # Tycho SDK Crates (Propeller Heads) - DO NOT MOCK
 # These are the authoritative domain primitives for blockchain state and simulation.
+# Published crates.io releases (the upstream git repos are archived). Exact pins:
+# tycho-simulation >= 0.218 drops the foundry dependency tree, and 0.249.0 pairs
+# with tycho-client/common/ethereum 0.149.0 (lru >= 0.16.3) in Cargo.lock.
+# tycho-execution stays on 0.143.0: later releases (e.g. 0.502.x) drop exact-out
+# solutions, native wrap/unwrap actions and SwapBuilder, which the encode API exposes.
 # =============================================================================
 
 # Simulation engine: ProtocolSim trait, GetAmountOutResult, spot_price, swap simulation
-tycho-simulation = { git = "https://github.com/propeller-heads/tycho-simulation.git", tag = "0.203.1", features = ["evm"] }
+tycho-simulation = { version = "=0.249.0", features = ["evm"] }
 
 # Execution encoding: TychoRouterEncoder, Solution, SwapBuilder for calldata generation
-tycho-execution = { git = "https://github.com/propeller-heads/tycho-execution.git", tag = "0.143.0", features = ["evm"] }
+tycho-execution = { version = "=0.143.0", features = ["evm"] }
 
 # =============================================================================
 # Async Runtime & Streaming
@@ -86,3 +91,5 @@ rayon = "1.10"
 # Testing
 # =============================================================================
 tokio-test = "0.4"
+# Registers test ProtocolSim implementations with the typetag-serialized trait
+typetag = "0.2"

@@ -71,8 +71,12 @@ pub use tycho_simulation::tycho_common::simulation::protocol_sim::GetAmountOutRe
 /// Simulation error types for handling edge cases.
 pub use tycho_simulation::tycho_common::simulation::errors::SimulationError;
 
-/// Trade representation for swap_to_price and query_supply results.
-pub use tycho_simulation::tycho_common::simulation::protocol_sim::Trade;
+/// Pool swap query types backing swap_to_price and query_supply.
+/// `QueryPoolSwapParams` carries the token pair and a `SwapConstraint`
+/// (`PoolTargetPrice` or `TradeLimitPrice`); the result is a `PoolSwap`.
+pub use tycho_simulation::tycho_common::simulation::protocol_sim::{
+    PoolSwap, QueryPoolSwapParams, SwapConstraint,
+};
 
 /// Price representation as a rational fraction (numerator/denominator).
 pub use tycho_simulation::tycho_common::simulation::protocol_sim::Price;
